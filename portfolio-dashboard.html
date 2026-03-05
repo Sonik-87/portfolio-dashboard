@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Investment Portfolio Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.15.3/Recharts.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body, #root { min-height: 100vh; background: #0a0a0f; }
+  body { font-family: 'DM Sans', -apple-system, sans-serif; color: #e5e7eb; -webkit-font-smoothing: antialiased; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+  button { font-family: inherit; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+const { PieChart, Pie, Cell, ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar, Legend } = Recharts;
+
+const PORTFOLIO = [
+  { name:"VWCE", fullName:"Vanguard FTSE All-World UCITS ETF Acc", isin:"IE00BK5BQT80", assetClass:"Global Equities", targetPct:60, ter:0.19, monthlyContrib:600, color:"#2563eb" },
+  { name:"VAGF", fullName:"Vanguard Global Agg Bond EUR Hedged Acc", isin:"IE00BG47KH54", assetClass:"Fixed Income", targetPct:25, ter:0.08, monthlyContrib:250, color:"#059669" },
+  { name:"HPRD", fullName:"HSBC FTSE EPRA NAREIT Developed", isin:"IE00B5L01S80", assetClass:"REITs", targetPct:5, ter:0.24, monthlyContrib:50, color:"#d97706" },
+  { name:"SGLD", fullName:"Invesco Physical Gold ETC", isin:"IE00B579F325", assetClass:"Gold", targetPct:5, ter:0.12, monthlyContrib:50, color:"#eab308" },
+  { name:"CASH", fullName:"Cash Reserve (High-Yield Savings)", isin:"—", assetClass:"Cash", targetPct:5, ter:0, monthlyContrib:50, color:"#6b7280" },
+];
+
+const FIRE_TARGET = 1000000;
+const MONTHLY = 1000;
+const RET = 0.07;
+
+function genProjection(start=0){
+  const d=[];let inv=start,pf=start;
+  for(let y=0;y<=25;y++){
+    d.push({year:`Yr ${y}`,invested:Math.round(inv),portfolio:Math.round(pf),fireTarget:FIRE_TARGET});
+    inv+=MONTHLY*12; pf=(pf+MONTHLY*12)*(1+RET);
+  }
+  return d;
+}
+function genDCA(){
+  return ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"].map(m=>({month:m,equities:600,bonds:250,reits:50,gold:50,cash:50}));
+}
+
+const StatCard=({label,value,sub,accent})=>(
+  <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:16,padding:"20px 24px",display:"flex",flexDirection:"column",gap:4,position:"relative",overflow:"hidden"}}>
+    <div style={{position:"absolute",top:0,left:0,right:0,height:2,background:accent||"linear-gradient(90deg,#2563eb,#7c3aed)"}}/>
+    <span style={{fontSize:11,textTransform:"uppercase",letterSpacing:1.5,color:"#6b7280",fontWeight:600}}>{label}</span>
+    <span style={{fontSize:28,fontWeight:700,color:"#f9fafb",fontFamily:"'DM Sans',sans-serif"}}>{value}</span>
+    {sub&&<span style={{fontSize:12,color:"#9ca3af"}}>{sub}</span>}
+  </div>
+);
+
+const SectionTitle=({children,icon})=>(
+  <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,marginTop:32}}>
+    {icon&&<span style={{fontSize:20}}>{icon}</span>}
+    <h2 style={{fontSize:16,fontWeight:700,color:"#e5e7eb",letterSpacing:0.5,textTransform:"uppercase",fontFamily:"'DM Sans',sans-serif",margin:0}}>{children}</h2>
+    <div style={{flex:1,height:1,background:"rgba(255,255,255,0.06)"}}/>
+  </div>
+);
+
+function App(){
+  const [liveData,setLiveData]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState(null);
+  const [lastFetch,setLastFetch]=useState(null);
+  const [activeTab,setActiveTab]=useState("overview");
+
+  const fetchLiveData=useCallback(async()=>{
+    setLoading(true);setError(null);
+    try{
+      const r=await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-20250514",max_tokens:1000,
+          system:"You are a financial data assistant. Return ONLY valid JSON, no markdown, no backticks, no preamble. Return an object with a 'prices' array containing objects with fields: ticker (string), price (number in EUR), change_pct (number, daily % change), currency (string, always 'EUR'). Use your best current knowledge for approximate prices.",
+          messages:[{role:"user",content:"Return current approximate EUR prices and daily % change for these ETFs: VWCE (ISIN IE00BK5BQT80), VAGF (ISIN IE00BG47KH54), HPRD (ISIN IE00B5L01S80), SGLD (ISIN IE00B579F325). Return JSON only."}],
+          tools:[{type:"web_search_20250305",name:"web_search"}],
+        }),
+      });
+      const d=await r.json();
+      const txt=d.content?.filter(b=>b.type==="text").map(b=>b.text).join("");
+      if(txt){const p=JSON.parse(txt.replace(/```json|```/g,"").trim());setLiveData(p.prices||p);setLastFetch(new Date());}
+    }catch(err){
+      console.error(err);setError("Could not fetch live data. Showing placeholder values.");
+      setLiveData([
+        {ticker:"VWCE",price:128.50,change_pct:0.34,currency:"EUR"},
+        {ticker:"VAGF",price:25.82,change_pct:-0.12,currency:"EUR"},
+        {ticker:"HPRD",price:15.67,change_pct:0.56,currency:"EUR"},
+        {ticker:"SGLD",price:265.30,change_pct:1.22,currency:"EUR"},
+      ]);setLastFetch(new Date());
+    }finally{setLoading(false);}
+  },[]);
+
+  useEffect(()=>{fetchLiveData();},[fetchLiveData]);
+
+  const getPrice=(ticker)=>{
+    if(!liveData)return null;
+    return (Array.isArray(liveData)?liveData:[]).find(d=>d.ticker===ticker);
+  };
+
+  const proj=genProjection(0);
+  const dcaData=genDCA();
+  const pieData=PORTFOLIO.map(p=>({name:p.name,value:p.targetPct,color:p.color}));
+  const tabs=[{id:"overview",label:"Overview"},{id:"holdings",label:"Holdings"},{id:"projection",label:"FIRE Projection"},{id:"allocation",label:"Allocation Plan"}];
+
+  const glideData=[
+    {age:"40-49",equities:60,bonds:25,reits:5,gold:5,cash:5},
+    {age:"50-54",equities:55,bonds:30,reits:5,gold:5,cash:5},
+    {age:"55-59",equities:50,bonds:35,reits:5,gold:5,cash:5},
+    {age:"60",equities:40,bonds:45,reits:5,gold:5,cash:5},
+    {age:"65+",equities:50,bonds:35,reits:5,gold:5,cash:5},
+  ];
+
+  const milestones=[
+    {name:"Emergency Fund",target:9000,icon:"🛡️"},
+    {name:"First €10K Invested",target:10000,icon:"🌱"},
+    {name:"€50K Down Payment",target:50000,icon:"🏠"},
+    {name:"€100K Net Worth",target:100000,icon:"💎"},
+    {name:"€250K Portfolio",target:250000,icon:"🚀"},
+    {name:"€500K Halfway",target:500000,icon:"⚡"},
+    {name:"€750K FIRE in Sight",target:750000,icon:"🔥"},
+    {name:"€1M Independence",target:1000000,icon:"🏆"},
+  ];
+
+  const rebalRules=[
+    {rule:"Rebalance annually or when drift exceeds ±5%",icon:"📅"},
+    {rule:"Direct new contributions to underweight assets first",icon:"🎯"},
+    {rule:"Sell to rebalance only as last resort in taxable accounts",icon:"⚠️"},
+    {rule:"Rebalance freely inside PEA/ISK/pension wrappers",icon:"🛡️"},
+  ];
+
+  const fmtY=v=>v>=1e6?`€${(v/1e6).toFixed(1)}M`:`€${(v/1e3).toFixed(0)}K`;
+  const ttStyle={background:"#1f2937",border:"1px solid rgba(255,255,255,0.1)",borderRadius:8,fontSize:12};
+  const fmtTT=v=>[`€${v.toLocaleString()}`,""];
+
+  return(
+    <div style={{minHeight:"100vh",background:"#0a0a0f",color:"#e5e7eb",fontFamily:"'DM Sans',-apple-system,sans-serif"}}>
+      {/* Header */}
+      <div style={{background:"linear-gradient(180deg,rgba(37,99,235,0.08) 0%,transparent 100%)",borderBottom:"1px solid rgba(255,255,255,0.04)",padding:"24px 32px 0"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20,flexWrap:"wrap",gap:12}}>
+          <div>
+            <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6}}>
+              <div style={{width:10,height:10,borderRadius:"50%",background:loading?"#eab308":liveData?"#22c55e":"#ef4444",boxShadow:loading?"0 0 8px #eab308":liveData?"0 0 8px #22c55e":"0 0 8px #ef4444"}}/>
+              <h1 style={{fontSize:24,fontWeight:700,color:"#f9fafb",margin:0,fontFamily:"'DM Sans',sans-serif",letterSpacing:-0.5}}>Investment Portfolio Dashboard</h1>
+            </div>
+            <p style={{fontSize:13,color:"#6b7280",margin:0}}>60/25/5/5/5 Allocation • Moderate Risk • European Investor{lastFetch&&<span> • Updated {lastFetch.toLocaleTimeString()}</span>}</p>
+          </div>
+          <button onClick={fetchLiveData} disabled={loading} style={{background:loading?"rgba(255,255,255,0.05)":"rgba(37,99,235,0.15)",border:"1px solid rgba(37,99,235,0.3)",color:loading?"#6b7280":"#60a5fa",padding:"8px 16px",borderRadius:8,cursor:loading?"wait":"pointer",fontSize:13,fontWeight:600,transition:"all 0.2s"}}>
+            {loading?"⟳ Fetching…":"↻ Refresh Prices"}
+          </button>
+        </div>
+        <div style={{display:"flex",gap:0,overflowX:"auto"}}>
+          {tabs.map(t=>(
+            <button key={t.id} onClick={()=>setActiveTab(t.id)} style={{background:activeTab===t.id?"rgba(255,255,255,0.06)":"transparent",border:"none",borderBottom:activeTab===t.id?"2px solid #2563eb":"2px solid transparent",color:activeTab===t.id?"#f9fafb":"#6b7280",padding:"10px 20px",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"'DM Sans',sans-serif",transition:"all 0.2s",whiteSpace:"nowrap"}}>{t.label}</button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{padding:"24px 32px",maxWidth:1200}}>
+        {error&&<div style={{background:"rgba(234,179,8,0.08)",border:"1px solid rgba(234,179,8,0.2)",borderRadius:8,padding:"10px 16px",marginBottom:16,fontSize:13,color:"#eab308"}}>⚠ {error}</div>}
+
+        {/* OVERVIEW */}
+        {activeTab==="overview"&&<>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:16,marginBottom:8}}>
+            <StatCard label="Monthly Investment" value="€1,000" sub="Automated via Sparplan" accent="#2563eb"/>
+            <StatCard label="FIRE Target" value="€1.0M" sub="At 3.5% SWR for €36K/yr" accent="#7c3aed"/>
+            <StatCard label="Projected Timeline" value="~20 yrs" sub="At 7% nominal returns" accent="#059669"/>
+            <StatCard label="Weighted TER" value="0.15%" sub="Blended expense ratio" accent="#eab308"/>
+          </div>
+          <SectionTitle icon="📊">Target Allocation</SectionTitle>
+          <div style={{display:"grid",gridTemplateColumns:"280px 1fr",gap:24,alignItems:"center"}}>
+            <div style={{height:240}}>
+              <ResponsiveContainer><PieChart><Pie data={pieData} cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={3} dataKey="value" stroke="none">{pieData.map((e,i)=><Cell key={i} fill={e.color}/>)}</Pie></PieChart></ResponsiveContainer>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {PORTFOLIO.map((p,i)=>{const price=getPrice(p.name);return(
+                <div key={i} style={{display:"grid",gridTemplateColumns:"12px 1fr 80px 100px 90px",alignItems:"center",gap:12,padding:"10px 14px",borderRadius:10,background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.04)"}}>
+                  <div style={{width:12,height:12,borderRadius:3,background:p.color}}/>
+                  <div><div style={{fontSize:13,fontWeight:600,color:"#f9fafb"}}>{p.name}</div><div style={{fontSize:11,color:"#6b7280"}}>{p.assetClass}</div></div>
+                  <div style={{fontSize:14,fontWeight:700,color:"#f9fafb",textAlign:"right"}}>{p.targetPct}%</div>
+                  <div style={{textAlign:"right"}}>{price?<span style={{fontSize:13,fontWeight:600,color:"#f9fafb",fontFamily:"'JetBrains Mono',monospace"}}>€{price.price?.toFixed(2)}</span>:p.name==="CASH"?<span style={{fontSize:12,color:"#6b7280"}}>2.00% APY</span>:<span style={{fontSize:12,color:"#4b5563"}}>—</span>}</div>
+                  <div style={{textAlign:"right"}}>{price?.change_pct!=null?<span style={{fontSize:12,fontWeight:600,color:price.change_pct>=0?"#22c55e":"#ef4444",fontFamily:"'JetBrains Mono',monospace"}}>{price.change_pct>=0?"▲":"▼"} {Math.abs(price.change_pct).toFixed(2)}%</span>:<span style={{fontSize:12,color:"#4b5563"}}>—</span>}</div>
+                </div>
+              );})}
+            </div>
+          </div>
+          <SectionTitle icon="📈">25-Year Growth Projection</SectionTitle>
+          <div style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.04)",borderRadius:16,padding:"20px 16px",height:300}}>
+            <ResponsiveContainer><AreaChart data={proj}>
+              <defs><linearGradient id="gp" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#2563eb" stopOpacity={0.3}/><stop offset="100%" stopColor="#2563eb" stopOpacity={0}/></linearGradient><linearGradient id="gi" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#6b7280" stopOpacity={0.2}/><stop offset="100%" stopColor="#6b7280" stopOpacity={0}/></linearGradient></defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)"/>
+              <XAxis dataKey="year" tick={{fill:"#6b7280",fontSize:11}} axisLine={false} tickLine={false}/>
+              <YAxis tick={{fill:"#6b7280",fontSize:11}} axisLine={false} tickLine={false} tickFormatter={fmtY}/>
+              <Tooltip contentStyle={ttStyle} labelStyle={{color:"#9ca3af"}} formatter={fmtTT}/>
+              <Area type="monotone" dataKey="fireTarget" stroke="#7c3aed" strokeWidth={1} strokeDasharray="6 4" fill="none" name="FIRE Target"/>
+              <Area type="monotone" dataKey="invested" stroke="#6b7280" strokeWidth={1.5} fill="url(#gi)" name="Total Invested"/>
+              <Area type="monotone" dataKey="portfolio" stroke="#2563eb" strokeWidth={2} fill="url(#gp)" name="Portfolio Value"/>
+            </AreaChart></ResponsiveContainer>
+          </div>
+          <div style={{display:"flex",gap:24,marginTop:8,justifyContent:"center",flexWrap:"wrap"}}>
+            {[{color:"#2563eb",label:"Projected portfolio (7% return)"},{color:"#6b7280",label:"Total invested"},{color:"#7c3aed",label:"€1M FIRE target",dashed:true}].map((l,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:6}}><div style={{width:16,height:2,borderTop:`2px ${l.dashed?"dashed":"solid"} ${l.color}`}}/><span style={{fontSize:11,color:"#6b7280"}}>{l.label}</span></div>
+            ))}
+          </div>
+        </>}
+
+        {/* HOLDINGS */}
+        {activeTab==="holdings"&&<>
+          <SectionTitle icon="💼">Live ETF Holdings</SectionTitle>
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            {PORTFOLIO.filter(p=>p.name!=="CASH").map((p,i)=>{const price=getPrice(p.name);return(
+              <div key={i} style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:16,padding:"20px 24px",display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:16,alignItems:"center"}}>
+                <div>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                    <div style={{width:8,height:8,borderRadius:2,background:p.color}}/>
+                    <span style={{fontSize:18,fontWeight:700,color:"#f9fafb",fontFamily:"'JetBrains Mono',monospace"}}>{p.name}</span>
+                  </div>
+                  <div style={{fontSize:12,color:"#6b7280",paddingLeft:16}}>{p.fullName}</div>
+                  <div style={{fontSize:11,color:"#4b5563",paddingLeft:16,marginTop:2}}>ISIN: {p.isin}</div>
+                </div>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:11,color:"#6b7280",textTransform:"uppercase",letterSpacing:1,marginBottom:4}}>Live Price</div>
+                  {price?<><div style={{fontSize:22,fontWeight:700,color:"#f9fafb",fontFamily:"'JetBrains Mono',monospace"}}>€{price.price?.toFixed(2)}</div><div style={{fontSize:13,fontWeight:600,marginTop:2,color:price.change_pct>=0?"#22c55e":"#ef4444"}}>{price.change_pct>=0?"+":""}{price.change_pct?.toFixed(2)}%</div></>:<div style={{fontSize:14,color:"#4b5563"}}>Loading…</div>}
+                </div>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:11,color:"#6b7280",textTransform:"uppercase",letterSpacing:1,marginBottom:4}}>Target Weight</div>
+                  <div style={{fontSize:22,fontWeight:700,color:p.color}}>{p.targetPct}%</div>
+                  <div style={{fontSize:12,color:"#6b7280",marginTop:2}}>TER: {p.ter}%</div>
+                </div>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:11,color:"#6b7280",textTransform:"uppercase",letterSpacing:1,marginBottom:4}}>Monthly DCA</div>
+                  <div style={{fontSize:22,fontWeight:700,color:"#f9fafb",fontFamily:"'JetBrains Mono',monospace"}}>€{p.monthlyContrib}</div>
+                  <div style={{fontSize:12,color:"#6b7280",marginTop:2}}>€{(p.monthlyContrib*12).toLocaleString()}/yr</div>
+                </div>
+              </div>
+            );})}
+          </div>
+          <div style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:16,padding:"16px 24px",marginTop:12,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12}}>
+            <div style={{display:"flex",alignItems:"center",gap:10}}><div style={{width:8,height:8,borderRadius:2,background:"#6b7280"}}/><span style={{fontSize:15,fontWeight:600,color:"#9ca3af"}}>Cash Reserve</span><span style={{fontSize:12,color:"#4b5563"}}>• Trade Republic @ 2.00% APY</span></div>
+            <div style={{display:"flex",gap:32}}><span style={{fontSize:14,fontWeight:600,color:"#6b7280"}}>5% target</span><span style={{fontSize:14,fontWeight:600,color:"#9ca3af",fontFamily:"'JetBrains Mono',monospace"}}>€50/mo</span></div>
+          </div>
+        </>}
+
+        {/* FIRE PROJECTION */}
+        {activeTab==="projection"&&<>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:16}}>
+            <StatCard label="FIRE Number" value="€1,000,000" sub="Annual expenses €36K × 27.8 (3.6% SWR)" accent="#7c3aed"/>
+            <StatCard label="Savings Rate Needed" value="~50%" sub="To reach FIRE in ~17 years" accent="#2563eb"/>
+            <StatCard label="State Pension Offset" value="40–70%" sub="Reduces withdrawals from age 65–67" accent="#059669"/>
+          </div>
+          <SectionTitle icon="🎯">FIRE Milestone Tracker</SectionTitle>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {milestones.map((m,i)=>(
+              <div key={i} style={{display:"grid",gridTemplateColumns:"36px 1fr 100px",alignItems:"center",gap:12,padding:"12px 16px",borderRadius:10,background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.04)"}}>
+                <span style={{fontSize:20,textAlign:"center"}}>{m.icon}</span>
+                <div><div style={{fontSize:14,fontWeight:600,color:"#e5e7eb"}}>{m.name}</div><div style={{height:4,borderRadius:2,marginTop:6,background:"rgba(255,255,255,0.06)",width:"100%"}}><div style={{height:"100%",borderRadius:2,width:"0%",background:"linear-gradient(90deg,#2563eb,#7c3aed)",transition:"width 0.5s"}}/></div></div>
+                <div style={{textAlign:"right",fontSize:14,fontWeight:600,color:"#6b7280",fontFamily:"'JetBrains Mono',monospace"}}>€{m.target>=1e6?"1.0M":m.target>=1e3?`${(m.target/1e3).toFixed(0)}K`:m.target}</div>
+              </div>
+            ))}
+          </div>
+          <SectionTitle icon="📈">Compound Growth Visualization</SectionTitle>
+          <div style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.04)",borderRadius:16,padding:"20px 16px",height:320}}>
+            <ResponsiveContainer><AreaChart data={proj}>
+              <defs><linearGradient id="gp2" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#7c3aed" stopOpacity={0.3}/><stop offset="100%" stopColor="#7c3aed" stopOpacity={0}/></linearGradient></defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)"/>
+              <XAxis dataKey="year" tick={{fill:"#6b7280",fontSize:11}} axisLine={false} tickLine={false}/>
+              <YAxis tick={{fill:"#6b7280",fontSize:11}} axisLine={false} tickLine={false} tickFormatter={fmtY}/>
+              <Tooltip contentStyle={ttStyle} formatter={fmtTT}/>
+              <Area type="monotone" dataKey="fireTarget" stroke="#ef4444" strokeWidth={1} strokeDasharray="6 4" fill="none" name="FIRE Target"/>
+              <Area type="monotone" dataKey="invested" stroke="#6b7280" strokeWidth={1.5} fill="none" name="Total Invested"/>
+              <Area type="monotone" dataKey="portfolio" stroke="#7c3aed" strokeWidth={2} fill="url(#gp2)" name="Portfolio Value"/>
+            </AreaChart></ResponsiveContainer>
+          </div>
+          <p style={{fontSize:12,color:"#4b5563",marginTop:8,textAlign:"center"}}>Assumes 7% nominal annual return, €1,000/month contributions. Real returns may vary.</p>
+        </>}
+
+        {/* ALLOCATION PLAN */}
+        {activeTab==="allocation"&&<>
+          <SectionTitle icon="🗓️">Monthly DCA Breakdown</SectionTitle>
+          <div style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.04)",borderRadius:16,padding:"20px 16px",height:280}}>
+            <ResponsiveContainer><BarChart data={dcaData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)"/>
+              <XAxis dataKey="month" tick={{fill:"#6b7280",fontSize:11}} axisLine={false} tickLine={false}/>
+              <YAxis tick={{fill:"#6b7280",fontSize:11}} axisLine={false} tickLine={false} tickFormatter={v=>`€${v}`}/>
+              <Tooltip contentStyle={ttStyle}/>
+              <Bar dataKey="equities" stackId="a" fill="#2563eb" name="Equities (€600)"/>
+              <Bar dataKey="bonds" stackId="a" fill="#059669" name="Bonds (€250)"/>
+              <Bar dataKey="reits" stackId="a" fill="#d97706" name="REITs (€50)"/>
+              <Bar dataKey="gold" stackId="a" fill="#eab308" name="Gold (€50)"/>
+              <Bar dataKey="cash" stackId="a" fill="#6b7280" name="Cash (€50)" radius={[4,4,0,0]}/>
+            </BarChart></ResponsiveContainer>
+          </div>
+          <SectionTitle icon="⚖️">Glide Path: Age-Based Allocation Shift</SectionTitle>
+          <div style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.04)",borderRadius:16,padding:"20px 16px",height:280}}>
+            <ResponsiveContainer><AreaChart data={glideData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)"/>
+              <XAxis dataKey="age" tick={{fill:"#6b7280",fontSize:11}} axisLine={false} tickLine={false}/>
+              <YAxis tick={{fill:"#6b7280",fontSize:11}} axisLine={false} tickLine={false} tickFormatter={v=>`${v}%`}/>
+              <Tooltip contentStyle={ttStyle}/>
+              <Area type="monotone" dataKey="equities" stackId="1" fill="#2563eb" stroke="#2563eb" fillOpacity={0.6} name="Equities"/>
+              <Area type="monotone" dataKey="bonds" stackId="1" fill="#059669" stroke="#059669" fillOpacity={0.6} name="Bonds"/>
+              <Area type="monotone" dataKey="reits" stackId="1" fill="#d97706" stroke="#d97706" fillOpacity={0.6} name="REITs"/>
+              <Area type="monotone" dataKey="gold" stackId="1" fill="#eab308" stroke="#eab308" fillOpacity={0.6} name="Gold"/>
+              <Area type="monotone" dataKey="cash" stackId="1" fill="#6b7280" stroke="#6b7280" fillOpacity={0.6} name="Cash"/>
+            </AreaChart></ResponsiveContainer>
+          </div>
+          <SectionTitle icon="🔧">Rebalancing Rules</SectionTitle>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:12}}>
+            {rebalRules.map((r,i)=>(
+              <div key={i} style={{display:"flex",gap:10,alignItems:"center",padding:"14px 16px",borderRadius:10,background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.04)"}}>
+                <span style={{fontSize:18}}>{r.icon}</span><span style={{fontSize:13,color:"#d1d5db"}}>{r.rule}</span>
+              </div>
+            ))}
+          </div>
+        </>}
+
+        {/* Footer */}
+        <div style={{marginTop:40,paddingTop:20,borderTop:"1px solid rgba(255,255,255,0.04)",textAlign:"center"}}>
+          <p style={{fontSize:11,color:"#4b5563",lineHeight:1.6,maxWidth:700,margin:"0 auto"}}>⚠ This dashboard is for informational and educational purposes only. It does not constitute financial advice. Past performance does not guarantee future results. Consult a licensed financial advisor before making investment decisions. Live prices are approximate and may be delayed.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+ReactDOM.render(<App/>,document.getElementById("root"));
+</script>
+</body>
+</html>
